@@ -33,12 +33,12 @@ init_db()
 # Add expenses
 @app.route("/add_expense", methods=["POST"])
 def add_expense():
-    data = request.json
+    data = request.get_json()
     amount = data.get("amount")
     description = data.get("description")
     category = categorize_expense(description)  # auto-categorization
 
-    conn = sqlite3.connect("expense.db")
+    conn = sqlite3.connect("expenses.db")
     cursor = conn.cursor()
     cursor.execute("INSERT INTO transactions (amount, category, description, date) VALUES (?, ?, ?, DATE('now'))",
                    (amount, category, description))
@@ -63,7 +63,7 @@ def categorize_expense(description):
 # Retrieve user spending
 @app.route("/get_summary", methods=["GET"])
 def get_summary():
-    conn = sqlite3.connect("expense.db")
+    conn = sqlite3.connect("expenses.db")
     cursor = conn.cursor()
     cursor.execute("SELECT category, SUM(amount) FROM transactions GROUP BY category")
     summary = cursor.fetchall()
@@ -75,11 +75,16 @@ def get_summary():
 # Warn user if they overspend
 @app.route("/check_budget", methods=["GET"])
 def check_budget():
-    budget = {"groceries": 200, "dining": 100, "transportation": 50}    # Set budgets
+    budget = {
+        "groceries": 200, 
+        "dining": 100, 
+        "transportation": 50,
+        "other": 150
+    }    # Set budgets
 
     conn = sqlite3.connect("expenses.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT category, SUM(amount) FROM transportation GROUP BY category")
+    cursor.execute("SELECT category, SUM(amount) FROM transactions GROUP BY category")
     summary = {category: total for category, total in cursor.fetchall()}
 
     alerts = []
@@ -87,8 +92,9 @@ def check_budget():
         if category in budget and total > budget[category]:
             alerts.append(f"Warning: You exceeded your {category} budget by ${total - budget[category]:.2f}!")
 
-            return jsonify({"alerts": alerts})
+    return jsonify({"alerts": alerts})
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port=5001)
+
