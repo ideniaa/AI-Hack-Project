@@ -10,6 +10,7 @@ import sqlite3
 
 app = Flask(__name__)
 
+
 # Initialize database
 def init_db():
     conn = sqlite3.connect("expenses.db")
@@ -28,7 +29,8 @@ def init_db():
 
 init_db()
 
-# Retrieve user spending
+
+# Add expenses
 @app.route("/add_expense", methods=["POST"])
 def add_expense():
     data = request.json
@@ -57,7 +59,8 @@ def categorize_expense(description):
             return category
     return "other"
 
-# Warn user if they overspend
+
+# Retrieve user spending
 @app.route("/get_summary", methods=["GET"])
 def get_summary():
     conn = sqlite3.connect("expense.db")
@@ -68,6 +71,8 @@ def get_summary():
 
     return jsonify({category: total for category, total in summary})
 
+
+# Warn user if they overspend
 @app.route("/check_budget", methods=["GET"])
 def check_budget():
     budget = {"groceries": 200, "dining": 100, "transportation": 50}    # Set budgets
