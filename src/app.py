@@ -1,56 +1,37 @@
-"""
-What this does:
-Sets up an API to log expenses
-Auto-categorizes transactions based on keywords
-Stores data in an SQLite database
-
-"""
-from flask import Flask, request, jsonify
-import sqlite3
+from flask import Flask, request, jsonify, render_template
+from database import init_db, add_expense_to_db, get_summary_from_db, check_budget_from_db
+from chatbot import get_chatbot_response
 
 app = Flask(__name__)
 
-
 # Initialize database
-def init_db():
-    conn = sqlite3.connect("expenses.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            amount REAL,
-            category TEXT,
-            description TEXT,
-            date TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
-
 init_db()
 
+# Home page route (serves chatbot UI)
+@app.route("/")
+def home():
+    return render_template("index.html")
 
-# Add expenses
+# Add an expense
 @app.route("/add_expense", methods=["POST"])
 def add_expense():
     data = request.get_json()
     amount = data.get("amount")
     description = data.get("description")
-    category = categorize_expense(description)  # auto-categorization
 
-    conn = sqlite3.connect("expenses.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO transactions (amount, category, description, date) VALUES (?, ?, ?, DATE('now'))",
-                   (amount, category, description))
-    conn.commit()
-    conn.close()
+    if not amount or not description:
+        return jsonify({"error": "Amount and description are required!"}), 400
+
+    category = categorize_expense(description)
+    add_expense_to_db(amount, category, description)
 
     return jsonify({"message": "Expense added", "category": category})
 
+# Categorization logic
 def categorize_expense(description):
     keywords = {
         "groceries": ["supermarket", "walmart", "grocery", "food"],
-        "dining": ["restaurant", "cafe", "diner", "lunch"],
+        "dining": ["restaurant", "cafe", "diner", "lunch", "coffee"],
         "transportation": ["uber", "gas", "subway", "train", "bus"],
         "entertainment": ["movie", "netflix", "concert", "game"]
     }
@@ -59,42 +40,26 @@ def categorize_expense(description):
             return category
     return "other"
 
-
-# Retrieve user spending
+# Retrieve user spending summary
 @app.route("/get_summary", methods=["GET"])
 def get_summary():
-    conn = sqlite3.connect("expenses.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT category, SUM(amount) FROM transactions GROUP BY category")
-    summary = cursor.fetchall()
-    conn.close()
+    return jsonify(get_summary_from_db())
 
-    return jsonify({category: total for category, total in summary})
-
-
-# Warn user if they overspend
+# Check if budget is exceeded
 @app.route("/check_budget", methods=["GET"])
 def check_budget():
-    budget = {
-        "groceries": 200, 
-        "dining": 100, 
-        "transportation": 50,
-        "other": 150
-    }    # Set budgets
+    return jsonify({"alerts": check_budget_from_db()})
 
-    conn = sqlite3.connect("expenses.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT category, SUM(amount) FROM transactions GROUP BY category")
-    summary = {category: total for category, total in cursor.fetchall()}
+# Chatbot for expense-related queries
+@app.route("/chatbot", methods=["POST"])
+def chatbot():
+    data = request.get_json()
+    user_input = data.get("query", "")
 
-    alerts = []
-    for category, total in summary.items():
-        if category in budget and total > budget[category]:
-            alerts.append(f"Warning: You exceeded your {category} budget by ${total - budget[category]:.2f}!")
+    if not user_input:
+        return jsonify({"error": "Query is required!"}), 400
 
-    return jsonify({"alerts": alerts})
-
+    return jsonify({"response": get_chatbot_response(user_input)})
 
 if __name__ == "__main__":
     app.run(debug=True, port=5001)
-
