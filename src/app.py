@@ -1,65 +1,126 @@
-from flask import Flask, request, jsonify, render_template
-from database import init_db, add_expense_to_db, get_summary_from_db, check_budget_from_db
-from chatbot import get_chatbot_response
+from flask import Flask, request, jsonify
+from chatbot import chatbot_response  # Importing the chatbot logic from chatbot.py
+from database import connect_db, add_expense, get_budget_insights, set_budget, init_db  # Import the init_db function
 
 app = Flask(__name__)
 
-# Initialize database
-init_db()
+# Initialize the database before the first request in modern Flask
+# Instead of @app.before_first_request which is deprecated
+with app.app_context():
+    init_db()
+    print("Database initialized successfully.")
 
-# Home page route (serves chatbot UI)
-@app.route("/")
-def home():
-    return render_template("index.html")
+# Categorize expense (Basic AI/Rule-Based)
+def categorize_expense(description):
+    categories = {
+        "food": ["groceries", "restaurant", "snack", "food", "lunch", "dinner", "breakfast"],
+        "housing": ["rent", "mortgage", "utilities", "electricity", "water", "gas bill", "internet"],
+        "transport": ["gas", "uber", "bus", "car", "taxi", "train", "subway", "lyft"],
+        "entertainment": ["movie", "game", "concert", "theater", "netflix", "subscription"],
+        "shopping": ["clothes", "electronics", "shoes", "amazon", "online", "mall"]
+    }
+    
+    description = description.lower()
+    for category, keywords in categories.items():
+        if any(keyword in description for keyword in keywords):
+            return category
+    
+    return "other"  # Default category if no match
 
-# Add an expense
-@app.route("/add_expense", methods=["POST"])
-def add_expense():
-    data = request.get_json()
+# Add expense to the database
+@app.route('/add_expense', methods=['POST'])
+def add_expense_route():
+    data = request.json
     amount = data.get("amount")
     description = data.get("description")
+    category = data.get("category")
+    
+    # If category not provided, auto-categorize
+    if not category:
+        category = categorize_expense(description)
 
-    if not amount or not description:
-        return jsonify({"error": "Amount and description are required!"}), 400
+    # Call the database function to add expense
+    add_expense(amount, description, category)
 
-    category = categorize_expense(description)
-    add_expense_to_db(amount, category, description)
+    return jsonify({"message": f"Expense of ${amount} added under {category} category."})
 
-    return jsonify({"message": "Expense added", "category": category})
+# Parse expense command from natural language
+def parse_expense_command(message):
+    # Simple parsing for expressions like "Add $50 for groceries"
+    if "add" in message.lower() and "$" in message:
+        parts = message.split("$")
+        if len(parts) > 1:
+            # Extract amount
+            amount_part = parts[1].split()[0].strip()
+            try:
+                amount = float(amount_part.replace(',', ''))
+                
+                # Extract description
+                desc_parts = message.lower().split("for")
+                if len(desc_parts) > 1:
+                    description = desc_parts[1].strip()
+                    return {"amount": amount, "description": description}
+            except ValueError:
+                pass
+    return None
 
-# Categorization logic
-def categorize_expense(description):
-    keywords = {
-        "groceries": ["supermarket", "walmart", "grocery", "food"],
-        "dining": ["restaurant", "cafe", "diner", "lunch", "coffee"],
-        "transportation": ["uber", "gas", "subway", "train", "bus"],
-        "entertainment": ["movie", "netflix", "concert", "game"]
-    }
-    for category, words in keywords.items():
-        if any(word in description.lower() for word in words):
-            return category
-    return "other"
+# Retrieve budget insights
+@app.route('/get_budget', methods=['GET', 'POST'])
+def get_budget_route():
+    if request.method == 'POST':
+        data = request.json
+        category = data.get("category")
+    else:
+        category = request.args.get("category")
 
-# Retrieve user spending summary
-@app.route("/get_summary", methods=["GET"])
-def get_summary():
-    return jsonify(get_summary_from_db())
+    # Call the database function to get budget insights
+    budget_info = get_budget_insights(category)
 
-# Check if budget is exceeded
-@app.route("/check_budget", methods=["GET"])
-def check_budget():
-    return jsonify({"alerts": check_budget_from_db()})
+    return jsonify(budget_info)
 
-# Chatbot for expense-related queries
-@app.route("/chatbot", methods=["POST"])
-def chatbot():
-    data = request.get_json()
-    user_input = data.get("query", "")
+# Set a budget for a category
+@app.route('/set_budget', methods=['POST'])
+def set_budget_route():
+    data = request.json
+    category = data.get("category")
+    limit_amount = data.get("limit_amount")
 
-    if not user_input:
-        return jsonify({"error": "Query is required!"}), 400
+    # Call the database function to set the budget
+    set_budget(category, limit_amount)
 
-    return jsonify({"response": get_chatbot_response(user_input)})
+    return jsonify({"message": f"Budget for {category} set to ${limit_amount}."})
 
-if __name__ == "__main__":
-    app.run(debug=True, port=5001)
+# API endpoint for chatbot interaction
+@app.route('/chat', methods=['POST'])
+def chat():
+    data = request.json
+    user_message = data.get("message", "")
+    
+    # Check if this is an expense command
+    expense_data = parse_expense_command(user_message)
+    if expense_data:
+        category = categorize_expense(expense_data["description"])
+        add_expense(expense_data["amount"], expense_data["description"], category)
+        return jsonify({
+            "response": f"I've added your expense of ${expense_data['amount']} for {expense_data['description']} under the {category} category."
+        })
+    
+    # Check if user is asking about budget
+    if "budget" in user_message.lower() and "for" in user_message.lower():
+        category = user_message.lower().split("budget for")[-1].strip().rstrip('?')
+        budget_info = get_budget_insights(category)
+        
+        if "message" in budget_info:
+            return jsonify({"response": budget_info["message"]})
+        else:
+            response = f"Budget for {category}: ${budget_info['limit_amount']}. " \
+                      f"You've spent ${budget_info['spent_amount']}, with ${budget_info['remaining_budget']} remaining. " \
+                      f"{budget_info['advice']}"
+            return jsonify({"response": response})
+    
+    # For other messages, use the standard chatbot response
+    response = chatbot_response(user_message)
+    return jsonify({"response": response})
+
+if __name__ == '__main__':
+    app.run(debug=True)
